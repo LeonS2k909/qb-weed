@@ -136,8 +136,7 @@ end
 function AddTargetsByModel(pot, model)
     ClearAllTargets(pot)
     if model == potEmpty then
-        AddTargetForSoil(pot)
-        AddTestFanOption(pot) -- Add the fan test option on empty pot
+        AddTargetForSoilAndFan(pot)
     elseif model == potSoil then
         AddTargetForSeeds(pot)
     elseif model == potWithPlant then
@@ -155,9 +154,25 @@ function AddTargetsByModel(pot, model)
     end
 end
 
-function AddTestFanOption(pot)
+function AddTargetForSoilAndFan(pot)
+    ClearAllTargets(pot)
     exports['qb-target']:AddTargetEntity(pot, {
         options = {
+            {
+                label = 'Add Soil',
+                icon = 'fas fa-seedling',
+                action = function(entity)
+                    QBCore.Functions.TriggerCallback('qb_weed:hasSoil', function(hasSoil)
+                        if hasSoil then
+                            ClearAllTargets(entity)
+                            ReplacePotModel(entity, potSoil, 'soil')
+                            TriggerServerEvent('qb_weed:removeSoil')
+                        else
+                            QBCore.Functions.Notify("You need soil!", "error")
+                        end
+                    end)
+                end
+            },
             {
                 label = 'Place Test Fan',
                 icon = 'fas fa-fan',
@@ -166,14 +181,42 @@ function AddTestFanOption(pot)
                     local heading = GetEntityHeading(entity)
                     RequestModel(fanProp)
                     while not HasModelLoaded(fanProp) do Wait(10) end
-                    local fan = CreateObject(fanProp, coords.x, coords.y - 1.0, coords.z, true, true, false)
-                    SetEntityHeading(fan, heading)
+                    local fanCoords = coords + GetEntityForwardVector(entity) * -1.0
+                    local fan = CreateObject(fanProp, fanCoords.x, fanCoords.y, fanCoords.z, true, true, false)
+                    SetEntityHeading(fan, heading + 180.0)
                     PlaceObjectOnGroundProperly(fan)
                     FreezeEntityPosition(fan, true)
                     SetEntityAsMissionEntity(fan, true, true)
                     SetModelAsNoLongerNeeded(fanProp)
                     table.insert(placedFans, fan)
                     QBCore.Functions.Notify("Test Fan placed.", "success")
+                    AddTargetForRemoveFan(fan)
+                end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
+                end
+            }
+        },
+        distance = 2.0,
+    })
+end
+
+function AddTargetForRemoveFan(fan)
+    exports['qb-target']:AddTargetEntity(fan, {
+        options = {
+            {
+                label = 'Pick Up Fan',
+                icon = 'fas fa-trash',
+                action = function(entity)
+                    DeleteEntity(entity)
+                    QBCore.Functions.Notify("Fan removed.", "success")
                 end
             }
         },
@@ -215,40 +258,6 @@ function AddTargetForVehiclePot(pot)
                         DeleteEntity(entity)
                         StartCarryingPot(model)
                     end
-                end
-            }
-        },
-        distance = 2.0,
-    })
-end
-
-function AddTargetForSoil(pot)
-    ClearAllTargets(pot)
-    exports['qb-target']:AddTargetEntity(pot, {
-        options = {
-            {
-                label = 'Add Soil',
-                icon = 'fas fa-seedling',
-                action = function(entity)
-                    QBCore.Functions.TriggerCallback('qb_weed:hasSoil', function(hasSoil)
-                        if hasSoil then
-                            ClearAllTargets(entity)
-                            ReplacePotModel(entity, potSoil, 'soil')
-                            TriggerServerEvent('qb_weed:removeSoil')
-                        else
-                            QBCore.Functions.Notify("You need soil!", "error")
-                        end
-                    end)
-                end
-            },
-            {
-                label = 'Pick Up Pot',
-                icon = 'fas fa-box',
-                action = function(entity)
-                    ClearAllTargets(entity)
-                    local model = GetEntityModel(entity)
-                    DeleteEntity(entity)
-                    StartCarryingPot(model)
                 end
             }
         },
@@ -340,18 +349,16 @@ function AddTargetForFan(pot)
                     local potHeading = GetEntityHeading(entity)
                     RequestModel(fanProp)
                     while not HasModelLoaded(fanProp) do Wait(10) end
-
-                    local offset = GetOffsetFromEntityInWorldCoords(entity, 0.0, -1.0, 0.0)
-                    local fan = CreateObject(fanProp, offset.x, offset.y, offset.z, true, true, false)
-                    local dir = potCoords - vector3(offset.x, offset.y, offset.z)
-                    local heading = math.deg(math.atan2(dir.y, dir.x))
-                    SetEntityHeading(fan, heading)
+                    local fanCoords = potCoords + GetEntityForwardVector(entity) * -1.0
+                    local fan = CreateObject(fanProp, fanCoords.x, fanCoords.y, fanCoords.z, true, true, false)
+                    SetEntityHeading(fan, potHeading + 180.0)
                     PlaceObjectOnGroundProperly(fan)
                     FreezeEntityPosition(fan, true)
                     SetEntityAsMissionEntity(fan, true, true)
                     SetModelAsNoLongerNeeded(fanProp)
                     table.insert(placedFans, fan)
                     QBCore.Functions.Notify("Fan placed for the plant!", "success")
+                    AddTargetForRemoveFan(fan)
                 end
             },
             {
@@ -389,7 +396,7 @@ function AddTargetForCut(pot)
                     FreezeEntityPosition(emptyPot, true)
                     SetEntityAsMissionEntity(emptyPot, true, true)
                     SetModelAsNoLongerNeeded(potEmpty)
-                    AddTargetForSoil(emptyPot)
+                    AddTargetForSoilAndFan(emptyPot)
                     TriggerServerEvent('qb_weed:giveWhiteWidow')
                 end
             },
@@ -429,8 +436,7 @@ RegisterNetEvent('qb_weed:placePot', function()
     SetEntityAsMissionEntity(pot, true, true)
     SetModelAsNoLongerNeeded(potEmpty)
 
-    AddTargetForSoil(pot)
-    AddTestFanOption(pot) -- Add fan test option right away
+    AddTargetForSoilAndFan(pot)
 end)
 
 RegisterCommand('placelight', function()
@@ -500,6 +506,7 @@ RegisterCommand('placefan', function()
         SetEntityAsMissionEntity(fan, true, true)
         SetModelAsNoLongerNeeded(fanProp)
         QBCore.Functions.Notify("Test fan placed.", "success")
+        AddTargetForRemoveFan(fan)
     else
         QBCore.Functions.Notify("Fan prop failed to spawn.", "error")
     end
