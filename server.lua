@@ -66,6 +66,15 @@ RegisterNetEvent('qb_weed:giveWhiteWidow', function()
     end
 end)
 
+RegisterNetEvent('qb_weed:givePotItem', function()
+    local src = source
+    local Player = QBCore.Functions.GetPlayer(src)
+    if Player then
+        Player.Functions.AddItem('weed_pot', 1)
+        TriggerClientEvent('inventory:client:ItemBox', src, QBCore.Shared.Items["weed_pot"], "add")
+    end
+end)
+
 RegisterNetEvent('qb_weed:placePot', function()
     local src = source
     TriggerClientEvent('qb_weed:placePot', src)

@@ -7,9 +7,25 @@ local potFullyGrown = `bkr_prop_weed_01_small_01b`
 local potMedGrown = `bkr_prop_weed_med_01a`
 local potMedFinished = `bkr_prop_weed_med_01b`
 local lightProp = "prop_worklight_03b"
+local fanProp = `prop_fan_01`
 local lightRadius = 5.0
 
 local placedLights = {}
+local placedFans = {}
+local carryingPot = false
+local carriedPot = nil
+local potsAttachedToVehicles = {}
+local lastPotModel = nil
+
+function GetPotCountInVehicle(vehicle)
+    local count = 0
+    for pot, veh in pairs(potsAttachedToVehicles) do
+        if veh == vehicle and DoesEntityExist(pot) then
+            count = count + 1
+        end
+    end
+    return count
+end
 
 function ClearAllTargets(entity)
     exports['qb-target']:RemoveTargetEntity(entity)
@@ -22,6 +38,188 @@ function IsPotNearLight(coords)
         end
     end
     return false
+end
+
+function StartCarryingPot(model)
+    if carryingPot then return end
+    carryingPot = true
+    lastPotModel = model
+
+    RequestModel(model)
+    while not HasModelLoaded(model) do Wait(10) end
+
+    local ped = PlayerPedId()
+    local pot = CreateObject(model, 0, 0, 0, true, true, false)
+    AttachEntityToEntity(
+        pot,
+        ped,
+        GetPedBoneIndex(ped, 57005),
+        0.13,
+        0.04,
+        -0.15,
+        10.0,
+        90.0,
+        0.0,
+        false, false, false, false, 2, true
+    )
+    carriedPot = pot
+
+    RequestAnimDict("anim@heists@box_carry@")
+    while not HasAnimDictLoaded("anim@heists@box_carry@") do Wait(10) end
+    TaskPlayAnim(ped, "anim@heists@box_carry@", "idle", 8.0, -8.0, -1, 49, 0, false, false, false)
+
+    QBCore.Functions.Notify("You are now carrying the pot. Press [G] to drop.", "primary")
+end
+
+function StopCarryingPot(dropCoords, dropHeading)
+    if not carryingPot or not carriedPot then return end
+
+    local pot = carriedPot
+    local ped = PlayerPedId()
+    local attachedToVehicle = false
+
+    local vehicle = GetVehicleInDirection(ped, 3.0)
+    if vehicle and vehicle ~= 0 then
+        local vehModel = GetEntityModel(vehicle)
+        local vehCoords = GetEntityCoords(vehicle)
+        local vehHeading = GetEntityHeading(vehicle)
+        local min, max = GetModelDimensions(vehModel)
+
+        local positions = {
+            [1] = { x =  0.0,   y = -1.30 },
+            [2] = { x =  0.0,   y = -1.75 },
+            [3] = { x =  0.0,   y = -2.25 },
+            [4] = { x = -0.33,  y = -2.10 },
+            [5] = { x =  0.33,  y = -2.10 },
+        }
+        local offsetZ = 0.30
+
+        local currentPotCount = GetPotCountInVehicle(vehicle) + 1
+        local grid = positions[currentPotCount] or positions[5]
+
+        DetachEntity(pot, true, true)
+        AttachEntityToEntity(pot, vehicle, 0, grid.x, grid.y, offsetZ, 0.0, 0.0, 0.0, false, false, true, false, 2, true)
+        SetEntityAsMissionEntity(pot, true, true)
+        potsAttachedToVehicles[pot] = vehicle
+        attachedToVehicle = true
+        QBCore.Functions.Notify("You put the pot in the vehicle bed.", "success")
+        AddTargetForVehiclePot(pot)
+    else
+        DetachEntity(pot, true, true)
+        SetEntityCoords(pot, dropCoords.x, dropCoords.y, dropCoords.z, false, false, false, true)
+        SetEntityHeading(pot, dropHeading or GetEntityHeading(ped))
+        PlaceObjectOnGroundProperly(pot)
+        FreezeEntityPosition(pot, true)
+        SetEntityAsMissionEntity(pot, true, true)
+        QBCore.Functions.Notify("You have placed the pot.", "success")
+        AddTargetsByModel(pot, lastPotModel)
+    end
+
+    carriedPot = nil
+    carryingPot = false
+    ClearPedTasks(ped)
+end
+
+function GetVehicleInDirection(ped, dist)
+    local coords = GetEntityCoords(ped)
+    local forward = GetEntityForwardVector(ped)
+    local destination = coords + (forward * (dist or 3.0))
+    local rayHandle = StartShapeTestRay(coords.x, coords.y, coords.z, destination.x, destination.y, destination.z, 10, ped, 0)
+    local _, hit, endCoords, surfaceNormal, entityHit = GetShapeTestResult(rayHandle)
+    if hit == 1 and IsEntityAVehicle(entityHit) then
+        return entityHit
+    else
+        return nil
+    end
+end
+
+function AddTargetsByModel(pot, model)
+    ClearAllTargets(pot)
+    if model == potEmpty then
+        AddTargetForSoil(pot)
+        AddTestFanOption(pot) -- Add the fan test option on empty pot
+    elseif model == potSoil then
+        AddTargetForSeeds(pot)
+    elseif model == potWithPlant then
+        AddTargetForWater(pot, "first")
+    elseif model == potWatered then
+        AddNoInteraction(pot)
+    elseif model == potFullyGrown then
+        AddTargetForWater(pot, "second")
+    elseif model == potMedGrown then
+        AddTargetForFan(pot)
+    elseif model == potMedFinished then
+        AddTargetForCut(pot)
+    else
+        AddPickupTarget(pot)
+    end
+end
+
+function AddTestFanOption(pot)
+    exports['qb-target']:AddTargetEntity(pot, {
+        options = {
+            {
+                label = 'Place Test Fan',
+                icon = 'fas fa-fan',
+                action = function(entity)
+                    local coords = GetEntityCoords(entity)
+                    local heading = GetEntityHeading(entity)
+                    RequestModel(fanProp)
+                    while not HasModelLoaded(fanProp) do Wait(10) end
+                    local fan = CreateObject(fanProp, coords.x, coords.y - 1.0, coords.z, true, true, false)
+                    SetEntityHeading(fan, heading)
+                    PlaceObjectOnGroundProperly(fan)
+                    FreezeEntityPosition(fan, true)
+                    SetEntityAsMissionEntity(fan, true, true)
+                    SetModelAsNoLongerNeeded(fanProp)
+                    table.insert(placedFans, fan)
+                    QBCore.Functions.Notify("Test Fan placed.", "success")
+                end
+            }
+        },
+        distance = 2.0,
+    })
+end
+
+function AddPickupTarget(pot, stage)
+    exports['qb-target']:AddTargetEntity(pot, {
+        options = {
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
+                end
+            }
+        },
+        distance = 2.0,
+    })
+end
+
+function AddTargetForVehiclePot(pot)
+    ClearAllTargets(pot)
+    exports['qb-target']:AddTargetEntity(pot, {
+        options = {
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    if potsAttachedToVehicles[entity] then
+                        DetachEntity(entity, true, true)
+                        SetEntityCollision(entity, true, true)
+                        potsAttachedToVehicles[entity] = nil
+                        local model = GetEntityModel(entity)
+                        DeleteEntity(entity)
+                        StartCarryingPot(model)
+                    end
+                end
+            }
+        },
+        distance = 2.0,
+    })
 end
 
 function AddTargetForSoil(pot)
@@ -41,6 +239,16 @@ function AddTargetForSoil(pot)
                             QBCore.Functions.Notify("You need soil!", "error")
                         end
                     end)
+                end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
                 end
             }
         },
@@ -65,6 +273,16 @@ function AddTargetForSeeds(pot)
                             QBCore.Functions.Notify("You need White Widow seeds!", "error")
                         end
                     end)
+                end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
                 end
             }
         },
@@ -94,6 +312,57 @@ function AddTargetForWater(pot, stage)
                         end
                     end)
                 end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
+                end
+            }
+        },
+        distance = 2.0,
+    })
+end
+
+function AddTargetForFan(pot)
+    ClearAllTargets(pot)
+    exports['qb-target']:AddTargetEntity(pot, {
+        options = {
+            {
+                label = 'Place Fan',
+                icon = 'fas fa-fan',
+                action = function(entity)
+                    local potCoords = GetEntityCoords(entity)
+                    local potHeading = GetEntityHeading(entity)
+                    RequestModel(fanProp)
+                    while not HasModelLoaded(fanProp) do Wait(10) end
+
+                    local offset = GetOffsetFromEntityInWorldCoords(entity, 0.0, -1.0, 0.0)
+                    local fan = CreateObject(fanProp, offset.x, offset.y, offset.z, true, true, false)
+                    local dir = potCoords - vector3(offset.x, offset.y, offset.z)
+                    local heading = math.deg(math.atan2(dir.y, dir.x))
+                    SetEntityHeading(fan, heading)
+                    PlaceObjectOnGroundProperly(fan)
+                    FreezeEntityPosition(fan, true)
+                    SetEntityAsMissionEntity(fan, true, true)
+                    SetModelAsNoLongerNeeded(fanProp)
+                    table.insert(placedFans, fan)
+                    QBCore.Functions.Notify("Fan placed for the plant!", "success")
+                end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
+                end
             }
         },
         distance = 2.0,
@@ -112,7 +381,6 @@ function AddTargetForCut(pot)
                     local coords = GetEntityCoords(entity)
                     local heading = GetEntityHeading(entity)
                     DeleteEntity(entity)
-                    -- Spawn empty pot again at the same spot
                     RequestModel(potEmpty)
                     while not HasModelLoaded(potEmpty) do Wait(50) end
                     local emptyPot = CreateObject(potEmpty, coords.x, coords.y, coords.z, true, true, false)
@@ -124,6 +392,16 @@ function AddTargetForCut(pot)
                     AddTargetForSoil(emptyPot)
                     TriggerServerEvent('qb_weed:giveWhiteWidow')
                 end
+            },
+            {
+                label = 'Pick Up Pot',
+                icon = 'fas fa-box',
+                action = function(entity)
+                    ClearAllTargets(entity)
+                    local model = GetEntityModel(entity)
+                    DeleteEntity(entity)
+                    StartCarryingPot(model)
+                end
             }
         },
         distance = 2.0,
@@ -132,6 +410,7 @@ end
 
 function AddNoInteraction(pot)
     ClearAllTargets(pot)
+    AddPickupTarget(pot)
 end
 
 RegisterNetEvent('qb_weed:placePot', function()
@@ -151,6 +430,7 @@ RegisterNetEvent('qb_weed:placePot', function()
     SetModelAsNoLongerNeeded(potEmpty)
 
     AddTargetForSoil(pot)
+    AddTestFanOption(pot) -- Add fan test option right away
 end)
 
 RegisterCommand('placelight', function()
@@ -191,6 +471,66 @@ RegisterCommand('placelight', function()
     end
 end, false)
 
+RegisterCommand('light', function()
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    RequestModel(lightProp)
+    while not HasModelLoaded(lightProp) do Wait(10) end
+    local obj = CreateObject(lightProp, coords.x, coords.y, coords.z - 1.0, true, true, false)
+    if DoesEntityExist(obj) then
+        PlaceObjectOnGroundProperly(obj)
+        FreezeEntityPosition(obj, true)
+        QBCore.Functions.Notify("Test light placed.", "success")
+    else
+        QBCore.Functions.Notify("Light prop failed to spawn.", "error")
+    end
+end, false)
+
+RegisterCommand('placefan', function()
+    local ped = PlayerPedId()
+    local coords = GetEntityCoords(ped)
+    local heading = GetEntityHeading(ped)
+    RequestModel(fanProp)
+    while not HasModelLoaded(fanProp) do Wait(10) end
+    local fan = CreateObject(fanProp, coords.x, coords.y, coords.z - 1.0, true, true, false)
+    if DoesEntityExist(fan) then
+        SetEntityHeading(fan, heading)
+        PlaceObjectOnGroundProperly(fan)
+        FreezeEntityPosition(fan, true)
+        SetEntityAsMissionEntity(fan, true, true)
+        SetModelAsNoLongerNeeded(fanProp)
+        QBCore.Functions.Notify("Test fan placed.", "success")
+    else
+        QBCore.Functions.Notify("Fan prop failed to spawn.", "error")
+    end
+end, false)
+
+CreateThread(function()
+    while true do
+        Wait(2000)
+        for pot, veh in pairs(potsAttachedToVehicles) do
+            if not DoesEntityExist(veh) and DoesEntityExist(pot) then
+                DeleteEntity(pot)
+                potsAttachedToVehicles[pot] = nil
+            end
+        end
+    end
+end)
+
+CreateThread(function()
+    while true do
+        Wait(0)
+        if carryingPot and carriedPot then
+            if IsControlJustPressed(0, 47) then -- [G]
+                local ped = PlayerPedId()
+                local coords = GetEntityCoords(ped)
+                local heading = GetEntityHeading(ped)
+                StopCarryingPot(coords + GetEntityForwardVector(ped) * 1.0, heading)
+            end
+        end
+    end
+end)
+
 function ReplacePotModel(oldPot, newModel, context)
     if not DoesEntityExist(oldPot) then return end
 
@@ -209,6 +549,8 @@ function ReplacePotModel(oldPot, newModel, context)
     FreezeEntityPosition(newPot, true)
     SetEntityAsMissionEntity(newPot, true, true)
     SetModelAsNoLongerNeeded(newModel)
+
+    lastPotModel = newModel
 
     if context == 'soil' then
         AddTargetForSeeds(newPot)
@@ -232,6 +574,7 @@ function ReplacePotModel(oldPot, newModel, context)
                 FreezeEntityPosition(potGrown, true)
                 SetEntityAsMissionEntity(potGrown, true, true)
                 SetModelAsNoLongerNeeded(potFullyGrown)
+                lastPotModel = potFullyGrown
                 local waitTime2 = 10000
                 if IsPotNearLight(coords2) then waitTime2 = 1000 end
                 CreateThread(function()
@@ -248,7 +591,7 @@ function ReplacePotModel(oldPot, newModel, context)
         CreateThread(function()
             Wait(waitTime)
             if DoesEntityExist(newPot) then
-                ClearAllTargets(newPot)
+                AddTargetForFan(newPot)
                 RequestModel(potMedFinished)
                 while not HasModelLoaded(potMedFinished) do Wait(50) end
                 local coords2 = GetEntityCoords(newPot)
@@ -260,6 +603,7 @@ function ReplacePotModel(oldPot, newModel, context)
                 FreezeEntityPosition(potMedDone, true)
                 SetEntityAsMissionEntity(potMedDone, true, true)
                 SetModelAsNoLongerNeeded(potMedFinished)
+                lastPotModel = potMedFinished
                 AddTargetForCut(potMedDone)
             end
         end)
